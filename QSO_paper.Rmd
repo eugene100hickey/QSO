@@ -1,0 +1,236 @@
+---
+title: "QSO Paper"
+author: "Eugene"
+date: "5 August 2018"
+output: pdf_document
+bibliography: /home/eugene/Desktop/Academic/Research/library.bib
+always_allow_html: yes
+---
+
+```{r include=T, message=F, warning=F, echo=F}
+knitr::opts_chunk$set(
+	echo = FALSE,
+	message = FALSE,
+	warning = FALSE
+)
+library(ggplot2)
+library(dplyr)
+library(tidyr)
+library(purrr)
+library(RColorBrewer)
+library(knitr)
+library(ggvis)
+library(RCurl)
+library(rjson)
+library(broom)
+library(geojsonio)
+library(png)
+```
+
+```{r cache=T}
+setwd("~/Desktop/Academic/Research/SDSS in R/QSO/R")
+
+QSO_lite <- read.csv("../data/QSO_lite.csv", sep = ",")
+
+z_scores <- read.csv("../data/scores_with_z.csv", sep = ",")
+z_scores <- z_scores %>% filter(rating != 0)
+```
+
+```{r SQL_data, echo=F, message=F, warning=F, cache=T}
+mag_range <- 19.0
+mag_delta <- 0.2
+g_r_difference <- 0.5
+targetSqlQuery = paste("select ObjID, ra, dec from star where ra between ",                        0, " and ", 360, " and dec between ",  -10, " and ",
+                       70, " and  r between ", mag_range, " and ", 
+                       mag_range + mag_delta," and g-r < ", g_r_difference,
+"--and psfmagerr_u < 0.05 and 
+psfmagerr_g < 0.05 and 
+psfmagerr_r < 0.05 and 
+psfmagerr_i < 0.05 and 
+psfmagerr_z < 0.05
+and ((flags & 0x10000000) != 0)       -- detected in BINNED1
+AND ((flags & 0x8100000c00a4) = 0)     -- not EDGE, NOPROFILE, PEAKCENTER,
+-- NOTCHECKED, PSF_FLUX_INTERP, SATURATED, or BAD_COUNTS_ERROR
+AND ((flags & 0x400000000000) = 0) 
+-- not DEBLEND_NOPEAK or small PSF error
+-- (substitute psfmagerr in other band as appropriate)
+AND (((flags & 0x100000000000) = 0) or (flags & 0x1000) = 0)", sep = " ")
+
+targetSqlQuery = gsub(pattern = "\n",replacement = " ", x = targetSqlQuery)
+urlBase = "http://skyserver.sdss.org/dr12/SkyserverWS/SearchTools/SqlSearch?"
+X = getForm(urlBase, cmd = targetSqlQuery, format = "csv")
+X = read.table(text=X, header=TRUE, sep=",", dec=".", comment.char="#")
+```
+
+## Introduction
+
+Differential photometry can help to produce high quality lightcurves from ground based observations. By using reference stars in the same telescope field, it mitigates the effects of atmospheric interference. Ideally this requires that the effect of the atmosphere be the same on both target and reference, but atmospheric effects are wavelength dependent. This means that the best reference stars should have similar spectra to their associated target. For stars this works well, and the correlation between stellar spectra in an SDSS filter band is typically 90% (O'Flynn et al, 2019). However, using stars as references for quasars poses greater problems, correlations of 60% are typically observed.
+
+This means that the choice of reference stars for quasar studies is of more crucial importance. It will be shown that parts of the sky near the limbs of the Milky Way are more fruitful places to search for low-Z quasars (Z < 4) with appropriate reference stars. In contrast, high-Z quasars with appropriate reference stars are more uniformly distributed across the sky [@Paris2017, @Fan1999].
+
+```{r spectra, message=F, warning=F, echo=F, cache=T, include=F}
+i <- 751
+plate <- QSO_lite$PLATE[i]
+mjd <- QSO_lite$MJD[i]
+fiber <- QSO_lite$FIBERID[i]
+url = paste0("http://dr12.sdss.org/csvSpectrum?plateid=",
+plate, "&mjd=", mjd,"&fiber=", fiber, "&reduction2d=v5_7_0")
+x = read.csv(file = url)
+#kable(head(x))
+x %>% ggplot(aes(x = Wavelength, y = BestFit)) + geom_line() + theme_minimal()
+```
+
+\newpage
+
+## Quantifying the Suitablility of Differential Photometry Fields
+
+The Locus Algorithm (Creaner et al) produces optimised differential photometry fields as well as a figure of merit (score) for each target. This algorithm produced results for `r dim(z_scores)[1]` quasars from DR5 of the SDSS quasar catalogue [@Schneider2007]. The suitability of an individual refernce star for a neighbouring quasar (its rating) from this algorithm is derived by comparing the SDSS photometric values for the quasar with those of the reference star; a value of 1 is the best possible match. The algorithm then adds the results for each reference star in the field of view to compute the overall score for an individual quasar. A histogram of these scores is shown below. The average score for a quasar is `r round(mean(z_scores$rating), 3)`, the median value is `r round(median(z_scores$rating), 3)`. The maximum score is `r round(max(z_scores$rating), 3)`, this was for a quasar at RA = `r round(z_scores$ra[1], 3)` and DEC = `r round(z_scores$dec[1], 3)` and which had a total of 48 reference stars.
+The spectra of quasars is significantly different (bluer) to those of stars and show a relatively narrow distribution compared to stars [@Fan1999]. This entails that finding suitable reference stars is more difficult and so the scores from the Locus Algorithm are lower for quasars than for stars. 
+
+
+## Distribution of QSO Differential Photometry Scores
+
+```{r hist, message=F, warning=F, echo=F, cache=T}
+z_scores %>% 
+  filter(rating > 0) %>% 
+  ggplot(aes(x = rating)) + 
+  geom_histogram(bins = 100, fill = "salmon") + 
+  #ylim(0, 2500) + 
+  xlim(0, 10) + 
+  xlab("QSO Figure-of-Merit (score)") + 
+  ylab("Number of QSO's") +
+  theme_minimal()
+  # ggvis(~ rating) %>% 
+  # layer_histograms(width = 0.1, fill = "skyblue") %>% 
+  # hide_legend("fill") %>% 
+  # add_axis("x", title = "QSO Figure-of-Merit") %>%
+  # add_axis("y", title = "Number of QSO's", 
+  #          properties = axis_props(title = list(dy = -50))) %>%
+  # scale_numeric("x", domain = c(0, 10), nice = FALSE, clamp = TRUE) %>% 
+  # scale_numeric("y", domain = c(0, 2000), nice = FALSE, clamp = TRUE)
+```
+
+\newpage
+
+## Spatial Distribution of Quasars
+
+The plot below shows the density distribution across the sky for all `r dim(z_scores)[1]` quasars analysed by the Locus Algorithm. Their distribution follows the sky coverage of the SDSS sky survey. Superimposed on this plot are the positions of the top 100 scoring quasars (crimson dots). It is clear that they do not repeat the pattern of larger pool of quasars but rather that they cluster towards the edges of the SDSS footprint. Also shown on the diagram is the outline of the Milky Way as it loops through the Northern sky.
+
+```{r ra_dec_plot, message=F, warning=F, echo=F, cache=T, fig.height=6}
+q <- geojson_read("../data/mw1.json", what = "sp")
+milky_way <- tidy(q)
+
+# z_scores %>% 
+#   arrange(desc(rating)) %>% 
+#   ggplot(aes(x = ra, y = dec)) +
+#     geom_point(alpha = 0.1, col = "salmon", size = 0.1) + 
+#     geom_point(aes(x = ra, y = dec), data = head(z_scores, 100))
+#     theme_minimal()
+
+z_scores %>% ggplot(aes(x = ra, y = dec)) +
+  stat_density_2d(aes(fill = ..level..), geom = "polygon", bins = 10) + 
+  labs(x = "RA", y = "DEC") +
+  scale_fill_distiller(palette = 2, direction = 1, guide = FALSE) +
+  scale_x_continuous(expand = c(0, 0)) +
+  scale_y_continuous(expand = c(0, 0)) +
+  theme(legend.position = 'none') +
+  geom_point(data = head(z_scores, 100), 
+             aes(x = ra, y = dec), col = "firebrick4") +
+  theme_minimal() +
+  theme(panel.grid.major = element_blank(), 
+        panel.grid.minor = element_blank()) + 
+  geom_line(data = milky_way, aes(x = long + 180, y = -lat), 
+              col = "salmon", alpha = 0.2)
+```
+
+\newpage
+
+To see why the top scoring quasars adopt such a distribution, we plot them again, but this time against a backdrop of blue stars. This is shown below. The selection of blue stars downloaded from SDSS must meet the criteria for _clean photometry_ set out on the [SDSS website](https://www.sdss.org/dr12/tutorials/flags/) and also the criteria set out in the table below:
+
+```{r blue_table, echo=F, message=F, warning=F, cache=T}
+blue_table <- data.frame(Criteria = c("Minimum r SDSS Magnitude",
+                                      "Maximum r SDSS Magnitude",
+                                      "Maximum g-r Value",
+                                      "psfmagerr (all bands)"),
+                         Values = c(mag_range, 
+                                    mag_range+mag_delta, g_r_difference, 0.05))
+
+kable(blue_table)
+
+```
+
+The magnitude range `r mag_range` to `r mag_range + mag_delta` is the range in which quasars are typically found, and the g-r value ensures that we have blue stars. Overall, `r dim(X)[1]` stars were downloaded from SDSS, this is just below the single download limit of 500,000 stars and is enough to provide a representative population distribution map.
+
+```{r blue_stars, message=F, warning=F, echo=F, cache=T}
+X %>% ggplot(aes(x = ra, y = dec)) +
+  stat_density_2d(aes(fill = ..level..), geom = "polygon", bins = 10) +   
+  labs(x = "RA", y = "DEC") +
+  scale_fill_gradient(low = "#ffffff", high = "#67AECB", guide = FALSE) +
+  scale_x_continuous(expand = c(0, 0)) +
+  scale_y_continuous(expand = c(0, 0)) +
+  theme(legend.position = 'none') +
+  theme_minimal() +
+  theme(panel.grid.major = element_blank(), 
+        panel.grid.minor = element_blank()) + 
+  geom_point(aes(x = ra, y = dec), data = head(z_scores, 100))
+```
+
+It can be seen that high scoring quasars are found in areas with high densities of these blue stars. These are in regions bordering on the edge of the Milky Way.
+
+\newpage
+
+The sub population of high scoring quasars with high redshift ($z \geqslant 4$) is now examined. Their distribution is plotted below. The background to the plot is all quasars in SDSS, the red dots represent the 100 top scoring quasars with $z \geqslant 4$. This time their distribution follows closely the overall distribution of quasars.
+
+```{r ra_dec_plot_highZ, message=F, warning=F, echo=F, cache=T}
+# z_scores %>% 
+#   arrange(desc(rating)) %>% 
+#   ggplot(aes(x = ra, y = dec)) +
+#     geom_point(alpha = 0.1, col = "skyblue", size = 0.1) + 
+#     geom_point(aes(x = ra, y = dec), col="firebrick4",
+#                data = head(z_scores %>% filter(Z > 4), 100)) + 
+#     theme_minimal() +
+#     theme(panel.grid.major = element_blank(), 
+#         panel.grid.minor = element_blank())
+
+z_scores %>% ggplot(aes(x = ra, y = dec)) +
+  stat_density_2d(aes(fill = ..level..), geom = "polygon", bins = 10) + 
+  labs(x = "RA", y = "DEC") +
+  scale_fill_distiller(palette = 2, direction = 1, guide = FALSE) +
+  scale_x_continuous(expand = c(0, 0)) +
+  scale_y_continuous(expand = c(0, 0)) +
+  theme(legend.position = 'none') +
+  geom_point(data = head(z_scores %>% filter(Z > 4), 100), 
+             aes(x = ra, y = dec), col = "firebrick4") +
+  theme_minimal() +
+  theme(panel.grid.major = element_blank(), 
+        panel.grid.minor = element_blank()) 
+```
+
+\newpage
+
+To see why high redshift quasars behave differently than the larger population, the colour dependence of quasars at different redshifts is examined. This is shown in the plot below. On the y-axis, the difference between the SDSS magnitudes g and r is plotted, on the x-axis it is the difference between magnitudes r and i. Each panel represents a different slice of quasars depending on their redshift, lowest redshift at top left progressing to the highest redshift quasars at bottom right. It can be seen that the r-i value doesn't evolve between redshift pools, but that for quasars with $z \geqslant 3$ there is a gradual increase in the g-r value. These quasars have magnitude patterns that more closely resemble stars and so it is not surprising that they can have good fields for differential photometry even in areas that are not especially enriched in blue stars.
+
+```{r g_r_Z, message=F, warning=F, echo=F, cache=T}
+z_scores %>%
+  mutate(Z_class = cut_interval(z_scores$Z, length = 0.5)) %>%
+  filter(Z < 4.5) %>%
+  mutate(deltaR = PSFMAG.2 - PSFMAG.3,
+         deltaI = PSFMAG.3 - PSFMAG.4) %>%
+  ggplot(aes(x = deltaI, y = deltaR)) +
+  stat_density_2d(aes(fill = ..level..), geom = "polygon", bins = 15) +
+  labs(x = "r-i magnitude difference",
+       y = "g-r magnitude difference") +
+  facet_wrap( ~ Z_class) +
+  xlim(-0.25, 0.75) +
+  ylim(-0.25, 2) +
+  theme_minimal() +
+  theme(legend.position = 'none')
+
+```
+
+
+
+## References
+
+
+
